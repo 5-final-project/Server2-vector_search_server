@@ -25,7 +25,7 @@ graph TD
         VectorStore -- Interacts with --> ChromaDB[(ChromaDB Vector Store)]
 
         EmbeddingModel -- Uses --> HFEmbeddings(LangChain HuggingFaceEmbeddings)
-        HFEmbeddings -- Loads --> HFModel[Hugging Face Model\n(BM-K/KoSimCSE-Unsup-RoBERTa)]
+        HFEmbeddings -- Loads --> HFModel[Hugging Face Model<br>(BM-K/KoSimCSE-Unsup-RoBERTa)]
     end
 
     subgraph "External Services / Data"
