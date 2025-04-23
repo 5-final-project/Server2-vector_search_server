@@ -1,0 +1,23 @@
+# Core dependencies
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+torch # Keep for HuggingFaceEmbeddings device selection if needed
+
+# LangChain specific
+langchain
+langchain-core
+langchain-community
+langchain-chroma
+langchain-huggingface
+chromadb # Keep as langchain-chroma depends on it
+transformers # Keep for HuggingFaceEmbeddings
+
+# Document Loading & Processing (LangChain uses these)
+unstructured # For various file types
+pypdf # For PDF loading via LangChain
+python-docx # Keep for docx loading if unstructured needs it
+
+# Removed: nltk, PyMuPDF (replaced by LangChain components)
+# Removed: numpy<2 (Let LangChain manage its numpy dependency)
