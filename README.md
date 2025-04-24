@@ -1,37 +1,41 @@
-# LangChain 기반 키워드 문서 검색 시스템
+# LangChain-Based Keyword Document Search System
 
-## 개요
+## Overview
 
-이 프로젝트는 FastAPI 웹 프레임워크와 LangChain 라이브러리를 사용하여 구축된 키워드 기반 문서 검색 시스템입니다. 사용자는 PDF, DOCX, TXT 등의 문서를 업로드할 수 있으며, 시스템은 이 문서들을 처리하여 벡터 데이터베이스(ChromaDB)에 저장합니다. 저장된 문서를 대상으로 키워드 기반의 의미론적 검색을 수행할 수 있으며, 유사도 점수를 기준으로 결과를 필터링하는 기능도 제공합니다.
+This project implements a keyword-based document search system built using the FastAPI web framework and the LangChain library. Users can upload documents (PDF, DOCX, TXT), which are then processed and stored in a vector database (ChromaDB). The system allows for semantic keyword searching within these documents and provides functionality to filter results based on similarity scores.
 
-## 아키텍처
+## Architecture
+
+The system follows a Retrieval-Augmented Generation (RAG) pattern, leveraging vector embeddings for semantic search.
 
 ```mermaid
 graph TD
     subgraph "User Interaction"
-        User(사용자) -- API Request --> FastAPI
+        User -- API Request --> FastAPI[FastAPI Server (app.py)]
     end
 
     subgraph "Application Layer (Python Modules)"
-        FastAPI(app.py) -- Reads --> Config(config.py)
-        FastAPI -- Uses --> APIModels(api_models.py)
-        FastAPI -- Calls --> DocProcessor(document_processor.py)
-        FastAPI -- Calls --> VectorStore(vector_store.py)
+        FastAPI -- Reads Config --> Config(config.py)
+        FastAPI -- Uses Models --> APIModels(api_models.py)
+        FastAPI -- Handles Uploads & Search --> SearchEngine(search_engine.py)
 
-        DocProcessor -- Uses --> LangChainLoaders(LangChain Document Loaders)
-        DocProcessor -- Uses --> LangChainSplitters(LangChain Text Splitters)
+        SearchEngine -- Processes Docs --> DocProcessor(document_processor.py)
+        SearchEngine -- Interacts with DB --> VectorStore(vector_store.py)
 
-        VectorStore -- Uses --> EmbeddingModel(embedding.py)
-        VectorStore -- Interacts with --> ChromaDB[(ChromaDB Vector Store)]
+        DocProcessor -- Loads Docs --> LangChainLoaders[LangChain Document Loaders]
+        DocProcessor -- Splits Text --> LangChainSplitters[LangChain Text Splitters]
 
-        EmbeddingModel -- Uses --> HFEmbeddings(LangChain HuggingFaceEmbeddings)
-        HFEmbeddings -- Loads --> HFModel[Hugging Face Model<br>(BM-K/KoSimCSE-Unsup-RoBERTa)]
+        VectorStore -- Generates Embeddings --> EmbeddingModel(embedding.py)
+        VectorStore -- Stores/Retrieves --> ChromaDB[(ChromaDB Vector Store)]
+
+        EmbeddingModel -- Uses --> HFEmbeddings[LangChain HuggingFaceEmbeddings]
+        HFEmbeddings -- Loads Model --> HFModel[Hugging Face Model<br>(BM-K/KoSimCSE-Unsup-RoBERTa)]
     end
 
-    subgraph "External Services / Data"
-        ChromaDB -- Stores/Retrieves --> Embeddings & Metadata
-        User -- Uploads --> UploadDir[/uploads/]
-        ChromaDB -- Persists data --> VectorDBDir[/vector_db_chroma_lc/]
+    subgraph "Data & Storage"
+        User -- Uploads Files --> UploadDir[/uploads/]
+        ChromaDB -- Persists Data --> VectorDBDir[/vector_db_chroma_lc/]
+        ChromaDB -- Stores --> Embeddings & Metadata
     end
 
     style User fill:#f9f,stroke:#333,stroke-width:2px
@@ -40,32 +44,52 @@ graph TD
     style HFModel fill:#ffc,stroke:#333,stroke-width:2px
 ```
 
-- **FastAPI (`app.py`):** API 엔드포인트 제공 및 전체 워크플로우 조율.
-- **LangChain:** 문서 로딩, 분할, 임베딩, 벡터 저장소 연동 등 핵심 RAG 파이프라인 구성.
-  - **Document Loaders (`document_processor.py`):** PDF, DOCX, TXT 파일 로드.
-  - **Text Splitters (`document_processor.py`):** 문서를 의미 있는 청크로 분할.
-  - **Embeddings (`embedding.py`):** Hugging Face 모델(`BM-K/KoSimCSE-Unsup-RoBERTa`)을 사용하여 텍스트를 벡터로 변환.
-  - **Vector Store (`vector_store.py`):** ChromaDB를 사용하여 벡터 및 메타데이터 저장/검색.
-- **ChromaDB:** 벡터 데이터베이스.
-- **Config (`config.py`):** 주요 설정값 관리.
+**Workflow:**
 
-## 주요 기능
+1.  **Document Upload:** The user uploads a document via the FastAPI endpoint.
+2.  **Processing (`document_processor.py`):**
+    - LangChain's `Document Loaders` read the content from PDF, DOCX, or TXT files.
+    - `Text Splitters` divide the document into smaller, semantically meaningful chunks.
+3.  **Embedding (`embedding.py`):**
+    - A pre-trained Hugging Face model (`BM-K/KoSimCSE-Unsup-RoBERTa` by default) via `LangChain HuggingFaceEmbeddings` converts each text chunk into a numerical vector (embedding).
+4.  **Indexing (`vector_store.py`):**
+    - The generated embeddings and associated metadata (like source document ID, name, chunk index) are stored in the ChromaDB vector store.
+5.  **Search Request:** The user sends a search query (keywords) via the API.
+6.  **Query Embedding:** The search keywords are converted into an embedding using the same Hugging Face model.
+7.  **Similarity Search (`vector_store.py`):**
+    - ChromaDB performs a similarity search (e.g., cosine similarity) between the query embedding and the stored document chunk embeddings.
+8.  **Results:** The system returns the document chunks most similar to the query, potentially filtered by a similarity score threshold.
 
-- **문서 업로드:** PDF, DOCX, TXT 파일 업로드 및 자동 처리/인덱싱.
-- **키워드 검색:** 입력된 키워드를 기반으로 의미적으로 유사한 문서 청크 검색.
-- **점수 기반 검색:** 유사도 점수를 계산하고, 설정된 임계값 이상의 결과만 필터링하여 반환.
-- **문서 목록 조회:** 현재 인덱싱된 문서 목록 확인.
+**Key Components:**
 
-## 설치 및 실행
+- **FastAPI (`app.py`, `api_models.py`):** Provides the web API endpoints for document upload, search, and listing. Handles request/response validation using Pydantic models.
+- **Search Engine (`search_engine.py`):** Orchestrates the core logic for document processing, indexing, and searching, coordinating between the document processor and vector store.
+- **LangChain:** The core library facilitating the RAG pipeline, including:
+  - **Document Loaders:** Interface for reading various file formats.
+  - **Text Splitters:** Algorithms for chunking documents effectively.
+  - **Embeddings Interface:** Wrapper around the Hugging Face embedding model.
+  - **Vector Store Interface:** Wrapper for interacting with ChromaDB.
+- **ChromaDB (`vector_store.py`):** The vector database used for efficient storage and retrieval of high-dimensional embeddings.
+- **Hugging Face Model (`embedding.py`):** The transformer model used to generate text embeddings (specifically `BM-K/KoSimCSE-Unsup-RoBERTa` for Korean semantic understanding).
+- **Configuration (`config.py`):** Manages settings like model names, database paths, chunking parameters, and search thresholds.
 
-1.  **저장소 복제:**
+## Key Features
+
+- **Document Upload:** Supports PDF, DOCX, and TXT file uploads with automatic processing and indexing.
+- **Keyword Search:** Performs semantic search based on input keywords to find relevant document chunks.
+- **Score-Based Filtering:** Calculates similarity scores and allows filtering results above a configurable threshold.
+- **Document Listing:** Provides an endpoint to view the list of currently indexed documents.
+
+## Installation and Setup
+
+1.  **Clone the Repository:**
 
     ```bash
     git clone <repository_url>
     cd llm_search_db
     ```
 
-2.  **가상 환경 생성 및 활성화:** (권장)
+2.  **Create and Activate a Virtual Environment:** (Recommended)
 
     ```bash
     python -m venv venv
@@ -75,37 +99,37 @@ graph TD
     source venv/bin/activate
     ```
 
-3.  **필요 라이브러리 설치:**
+3.  **Install Dependencies:**
 
     ```bash
     pip install -r requirements.txt
     ```
 
-    - **참고:** `unstructured` 라이브러리는 파일 유형에 따라 추가적인 시스템 라이브러리(예: `libmagic`, `poppler`) 설치가 필요할 수 있습니다. [unstructured 설치 가이드](https://unstructured-io.github.io/unstructured/installation/full_installation.html)를 참조하세요.
+    - **Note:** The `unstructured` library might require additional system dependencies (like `libmagic`, `poppler`) depending on the file types you intend to process. Refer to the [official unstructured installation guide](https://unstructured-io.github.io/unstructured/installation/full_installation.html) for details.
 
-4.  **설정 확인 (`config.py`):** (선택 사항)
+4.  **Review Configuration (`config.py`):** (Optional)
 
-    - `EMBED_MODEL_NAME`: 사용할 Hugging Face 임베딩 모델 이름.
-    - `VECTOR_DB_PATH`: ChromaDB 데이터 저장 경로.
-    - `LC_CHUNK_SIZE`, `LC_CHUNK_OVERLAP`: 텍스트 분할 시 청크 크기 및 오버랩.
-    - `SIMILARITY_THRESHOLD`: `/search_score` 엔드포인트에서 사용할 유사도 임계값.
-    - `SEARCH_K`: 검색 시 반환할 기본 결과 수.
+    - `EMBED_MODEL_NAME`: Hugging Face model for embeddings.
+    - `VECTOR_DB_PATH`: Path to store ChromaDB data.
+    - `LC_CHUNK_SIZE`, `LC_CHUNK_OVERLAP`: Parameters for text splitting.
+    - `SIMILARITY_THRESHOLD`: Minimum similarity score for `/search_score` results.
+    - `SEARCH_K`: Default number of results to return for searches.
 
-5.  **애플리케이션 실행:**
+5.  **Run the Application:**
     ```bash
     python app.py
     ```
-    서버가 `http://0.0.0.0:8000` (또는 `http://127.0.0.1:8000`)에서 실행됩니다.
+    The server will start, typically accessible at `http://127.0.0.1:8000`.
 
-## API 엔드포인트
+## API Endpoints
 
-FastAPI는 자동 API 문서(`http://127.0.0.1:8000/docs`)를 제공합니다.
+FastAPI provides interactive API documentation (Swagger UI) at `http://127.0.0.1:8000/docs`.
 
 - **`POST /upload-document`**
 
-  - 설명: 문서를 업로드하고 처리하여 벡터 저장소에 추가합니다.
-  - 요청 본문: `multipart/form-data` 형식의 파일 (`file` 필드).
-  - 성공 응답 (200):
+  - **Description:** Uploads, processes, and indexes a document.
+  - **Request Body:** `multipart/form-data` with a `file` field containing the document.
+  - **Success Response (200):**
     ```json
     {
       "doc_id": "generated-uuid",
@@ -116,59 +140,56 @@ FastAPI는 자동 API 문서(`http://127.0.0.1:8000/docs`)를 제공합니다.
 
 - **`POST /search`**
 
-  - 설명: 키워드로 문서를 검색합니다 (점수 필터링 없음).
-  - 요청 본문:
+  - **Description:** Searches for documents based on keywords without score filtering. Supports optional metadata filtering.
+  - **Request Body:**
     ```json
     {
-      "keywords": ["검색어1", "검색어2"],
-      "k": 5,
-      "filter": null
+      "keywords": ["search term1", "search term2"],
+      "k": 5, // Optional: Number of results (defaults to config.SEARCH_K)
+      "filter": null // Optional: ChromaDB metadata filter (e.g., {"doc_name": {"$eq": "specific.pdf"}})
     }
     ```
-    또는 (필터링 시)
-    ```json
-    {
-      "keywords": ["검색어"],
-      "k": 3,
-      "filter": { "doc_name": { "$eq": "specific_doc.pdf" } }
-    }
-    ```
-  - 성공 응답 (200):
+  - **Success Response (200):**
     ```json
     {
       "results": [
         {
-          "page_content": "문서 청크 내용...",
-          "metadata": {"source": "file.pdf", "doc_id": "...", "doc_name": "...", "chunk_index": 0},
-          "score": null
-        },
-        ...
+          "page_content": "Content of the document chunk...",
+          "metadata": {
+            "source": "file.pdf",
+            "doc_id": "...",
+            "doc_name": "...",
+            "chunk_index": 0
+          },
+          "score": null // Score is null for this endpoint
+        }
+        // ... more results
       ]
     }
     ```
 
 - **`POST /search_score`**
 
-  - 설명: 키워드로 문서를 검색하고, 설정된 유사도 임계값(`SIMILARITY_THRESHOLD`) 이상인 결과만 점수와 함께 반환합니다.
-  - 요청 본문: `/search`와 동일.
-  - 성공 응답 (200):
+  - **Description:** Searches documents by keywords and returns results exceeding the `SIMILARITY_THRESHOLD` along with their scores.
+  - **Request Body:** Same as `/search`.
+  - **Success Response (200):**
     ```json
     {
       "results": [
         {
-          "page_content": "문서 청크 내용...",
+          "page_content": "Content of the relevant document chunk...",
           "metadata": {"source": "file.pdf", ...},
-          "score": 0.85
+          "score": 0.85 // Similarity score
         },
-        ...
+        // ... more results above the threshold
       ]
     }
     ```
-    (임계값 미달 시 `results`는 빈 리스트 `[]`가 됩니다.)
+    (Returns `{"results": []}` if no chunks meet the threshold).
 
 - **`GET /documents`**
-  - 설명: 현재 인덱싱된 문서 목록(ID 및 이름)을 반환합니다.
-  - 성공 응답 (200):
+  - **Description:** Retrieves a list of all indexed documents (ID and name).
+  - **Success Response (200):**
     ```json
     {
       "documents": [
@@ -178,11 +199,12 @@ FastAPI는 자동 API 문서(`http://127.0.0.1:8000/docs`)를 제공합니다.
     }
     ```
 
-## 기술 스택
+## Technology Stack
 
-- Python 3.10+
-- FastAPI: 웹 프레임워크
-- LangChain: RAG 파이프라인 구축 (문서 로딩, 분할, 임베딩, 벡터 저장소 연동)
-- ChromaDB: 벡터 데이터베이스
-- Hugging Face Transformers & Sentence Transformers: 임베딩 모델 로딩 및 사용
-- Uvicorn: ASGI 서버
+- **Python:** 3.10+
+- **FastAPI:** High-performance web framework for building APIs.
+- **LangChain:** Framework for developing applications powered by language models, used here for the RAG pipeline.
+- **ChromaDB:** Open-source vector database for embedding storage and search.
+- **Hugging Face Transformers & Sentence Transformers:** Libraries for loading and using the embedding model.
+- **Uvicorn:** ASGI server to run the FastAPI application.
+- **Unstructured:** Library for parsing various document formats.
