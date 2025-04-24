@@ -11,13 +11,13 @@ The system follows a Retrieval-Augmented Generation (RAG) pattern, leveraging ve
 ```mermaid
 graph TD
     subgraph "User Interaction"
-        User -- API Request --> FastAPI[FastAPI Server (app.py)]
+        User -- API Request --> AppServer[FastAPI Server (app.py)]
     end
 
     subgraph "Application Layer (Python Modules)"
-        FastAPI -- Reads Config --> Config(config.py)
-        FastAPI -- Uses Models --> APIModels(api_models.py)
-        FastAPI -- Handles Uploads & Search --> SearchEngine(search_engine.py)
+        AppServer -- Reads Config --> Config(config.py)
+        AppServer -- Uses Models --> APIModels(api_models.py)
+        AppServer -- Handles Uploads & Search --> SearchEngine(search_engine.py)
 
         SearchEngine -- Processes Docs --> DocProcessor(document_processor.py)
         SearchEngine -- Interacts with DB --> VectorStore(vector_store.py)
@@ -39,7 +39,7 @@ graph TD
     end
 
     style User fill:#f9f,stroke:#333,stroke-width:2px
-    style FastAPI fill:#ccf,stroke:#333,stroke-width:2px
+    style AppServer fill:#ccf,stroke:#333,stroke-width:2px
     style ChromaDB fill:#cfc,stroke:#333,stroke-width:2px
     style HFModel fill:#ffc,stroke:#333,stroke-width:2px
 ```
@@ -116,10 +116,34 @@ graph TD
     - `SEARCH_K`: Default number of results to return for searches.
 
 5.  **Run the Application:**
+
     ```bash
     python app.py
     ```
+
     The server will start, typically accessible at `http://127.0.0.1:8000`.
+
+6.  **Running with Docker:** (Optional)
+
+    Alternatively, you can build and run the application using Docker:
+
+    a. **Build the Docker Image:**
+    `bash
+    # Make sure Docker is running
+    docker build -t llm_search_db . 
+    # Replace 'llm_search_db' with your preferred image name
+    `
+
+    b. **Run the Docker Container:**
+    ```bash # Basic run (data is ephemeral)
+    docker run -p 8000:8000 llm_search_db
+
+        # Run with persistent vector database storage
+        # This mounts the local 'vector_db_chroma_lc' directory into the container
+        # Ensure the local directory exists or adjust the path as needed
+        # docker run -p 8000:8000 -v ./vector_db_chroma_lc:/app/vector_db_chroma_lc llm_search_db
+        ```
+        The application will be accessible at `http://localhost:8000`.
 
 ## API Endpoints
 
