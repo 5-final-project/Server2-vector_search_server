@@ -10,7 +10,8 @@ from langchain_community.document_loaders import (
     TextLoader,
     UnstructuredFileLoader # Generic loader, might require extra dependencies
 )
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# from langchain_text_splitters import RecursiveCharacterTextSplitter
+from text_spliter import KoreanSentenceSplitter
 from langchain_core.documents import Document
 
 from config import config # Import config instance
@@ -22,14 +23,14 @@ logger = logging.getLogger(__name__)
 # --- Text Splitter Initialization ---
 # Using RecursiveCharacterTextSplitter as a good default
 # Consider KoreanTextSplitter from langchain_experimental for better Korean handling if needed later
-text_splitter = RecursiveCharacterTextSplitter(
+text_splitter = KoreanSentenceSplitter(
     chunk_size=config.LC_CHUNK_SIZE,
     chunk_overlap=config.LC_CHUNK_OVERLAP,
     # separators=["\n\n", "\n", " ", ""] # Default separators are usually fine
     length_function=len, # Use character length
-    is_separator_regex=False,
+    # is_separator_regex=False, # Removed, as False is the default in the parent class
 )
-logger.info(f"Initialized RecursiveCharacterTextSplitter with chunk_size={config.LC_CHUNK_SIZE}, chunk_overlap={config.LC_CHUNK_OVERLAP}")
+logger.info(f"Initialized KoreanSentenceSplitter with chunk_size={config.LC_CHUNK_SIZE}, chunk_overlap={config.LC_CHUNK_OVERLAP}")
 
 
 # --- Document Loading Logic ---

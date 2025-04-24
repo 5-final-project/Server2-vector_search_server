@@ -19,7 +19,7 @@ class Config:
 
     # Search settings
     SEARCH_K = 1 # Number of results to return
-    SIMILARITY_THRESHOLD = 0.6 # Minimum similarity score to consider a result relevant (0.0 to 1.0)
+    SIMILARITY_THRESHOLD = 0.1 # Minimum similarity score to consider a result relevant (0.0 to 1.0)
 
 # Ensure directories exist
 os.makedirs(Config.UPLOAD_DIR, exist_ok=True)

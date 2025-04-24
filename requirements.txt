@@ -18,6 +18,7 @@ transformers # Keep for HuggingFaceEmbeddings
 unstructured # For various file types
 pypdf # For PDF loading via LangChain
 python-docx # Keep for docx loading if unstructured needs it
-
+kss
+numpy<2
 # Removed: nltk, PyMuPDF (replaced by LangChain components)
 # Removed: numpy<2 (Let LangChain manage its numpy dependency)
