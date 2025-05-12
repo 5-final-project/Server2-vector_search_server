@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documents Visualization - {{ current_collection }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1 { color: #333; text-align: center; }
+        h2 { color: #555; margin-top: 30px; border-bottom: 2px solid #ddd; padding-bottom: 5px;}
+        .document { background-color: #fff; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .chunk { border: 1px solid #eee; border-radius: 4px; margin-top: 10px; padding: 10px; background-color: #f9f9f9; }
+        .chunk p { margin: 5px 0; }
+        .chunk-content { white-space: pre-wrap; word-wrap: break-word; font-family: monospace; background-color: #efefef; padding: 8px; border-radius: 4px; }
+        .metadata { font-size: 0.9em; color: #777; }
+        strong { color: #007bff; }
+        .no-documents { text-align: center; font-size: 1.2em; color: #777; margin-top: 50px; }
+        .collection-title { font-size: 1.5em; color: #007bff; text-align: center; margin-bottom: 20px;}
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select { padding: 8px; margin-bottom: 20px; border-radius: 4px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+    <h1>Document Visualization</h1>
+    <p class="collection-title">Collection: <strong>{{ current_collection }}</strong></p>
+
+    <label for="collectionSelector">Select Collection:</label>
+    <select id="collectionSelector" name="collection_name" onchange="changeCollection()">
+        {% for collection in collections %}
+            <option value="{{ collection }}" {% if collection == current_collection %}selected{% endif %}>{{ collection }}</option>
+        {% endfor %}
+    </select>
+
+    {% if documents %}
+        {% for doc in documents %}
+            <div class="document">
+                <h2>Document: {{ doc.doc_name }} (ID: {{ doc.doc_id }})</h2>
+                <button onclick="deleteDocument('{{ doc.doc_id }}', '{{ current_collection }}')" style="background-color: #f44336; color: white; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px;">Delete Document</button>
+                {% if doc.chunks %}
+                    {% for chunk in doc.chunks %}
+                        <div class="chunk">
+                            <p class="metadata"><strong>Chunk Internal ID:</strong> {{ chunk.chunk_id_internal }}</p>
+                            <p class="metadata"><strong>Chunk Index in Doc:</strong> {{ chunk.chunk_index }}</p>
+                            <p><strong>Content:</strong></p>
+                            <pre class="chunk-content">{{ chunk.content }}</pre>
+                            <p class="metadata"><strong>Metadata:</strong> {{ chunk.metadata }}</p>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <p>No chunks found for this document.</p>
+                {% endif %}
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="no-documents">No documents found in the collection.</p>
+    {% endif %}
+
+<script>
+function changeCollection() {
+    const selector = document.getElementById('collectionSelector');
+    const selectedCollection = selector.value;
+    if (selectedCollection) {
+        window.location.href = `/documents_ui?collection_name=${selectedCollection}`;
+    }
+}
+
+async function deleteDocument(docId, collectionName) {
+    if (!docId) {
+        alert('Document ID is missing. Cannot delete.');
+        return;
+    }
+    if (!collectionName) {
+        alert('Collection name is missing. Cannot delete.');
+        return;
+    }
+
+    if (confirm(`Are you sure you want to delete document with ID: ${docId} from collection ${collectionName} (and master collection)?`)) {
+        try {
+            const response = await fetch(`/documents/${docId}?collection_name=${encodeURIComponent(collectionName)}`, {
+                method: 'DELETE',
+            });
+
+            const result = await response.json(); // Try to parse JSON regardless of ok status for more info
+
+            if (response.ok) {
+                alert(result.message || `Document ${docId} deleted successfully.`);
+                window.location.reload(); // Reload the page to reflect changes
+            } else {
+                alert(`Error deleting document ${docId}: ${result.detail || result.error || response.statusText}`);
+            }
+        } catch (error) {
+            console.error('Error during delete operation:', error);
+            alert('An unexpected error occurred while trying to delete the document. Check the console for more details.');
+        }
+    }
+}
+</script>
+
+</body>
+</html>

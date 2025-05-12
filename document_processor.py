@@ -5,7 +5,7 @@ import uuid
 
 # LangChain components for loading and splitting
 from langchain_community.document_loaders import (
-    PyPDFLoader,
+    PDFMinerLoader,
     UnstructuredWordDocumentLoader,
     TextLoader,
     UnstructuredFileLoader # Generic loader, might require extra dependencies
@@ -42,7 +42,7 @@ def load_document(file_path: str) -> List[Document]:
 
     try:
         if file_extension == ".pdf":
-            loader = PyPDFLoader(file_path)
+            loader = PDFMinerLoader(file_path)
         elif file_extension in [".docx", ".doc"]:
             # UnstructuredWordDocumentLoader often works well
             loader = UnstructuredWordDocumentLoader(file_path, mode="elements") # Try "elements" mode
@@ -95,29 +95,60 @@ def split_documents(documents: List[Document]) -> List[Document]:
 
 
 # --- Combined Processing Function (Example Usage Pattern) ---
-def load_and_split_document(file_path: str, doc_id: Optional[str] = None) -> List[Document]:
-    """Loads a document, splits it into chunks, and adds metadata."""
-    if doc_id is None:
-        doc_id = str(uuid.uuid4())
+SUPPORTED_FILE_TYPES = { # Added to ensure we can check against it
+    ".pdf": PDFMinerLoader,
+    ".txt": TextLoader,
+    # ".csv": CSVLoader,
+    # TODO: Add .doc and .docx with UnstructuredFileLoader if textൃact is installed
+    # ".doc": UnstructuredFileLoader, 
+    # ".docx": UnstructuredFileLoader,
+}
+
+def load_and_split_document(file_path: str, doc_id: str, original_doc_name: str) -> List[Document]: # Added original_doc_name
+    """Loads a document from file_path, splits it into chunks, and adds metadata."""
+    file_extension = os.path.splitext(file_path)[1].lower()
+    loader_class = SUPPORTED_FILE_TYPES.get(file_extension)
+
+    if not loader_class:
+        logger.error(f"Unsupported file type: {file_extension} for file: {original_doc_name}")
+        # Return empty list or raise specific error
+        raise ValueError(f"Unsupported file type: {file_extension}. Supported types are: {', '.join(SUPPORTED_FILE_TYPES.keys())}")
+
+    try:
+        loader = loader_class(file_path)
+        documents = loader.load() # This typically returns a list of Document objects (often just one for these loaders)
+    except Exception as e:
+        logger.error(f"Error loading document {original_doc_name} with {loader_class.__name__}: {e}")
+        raise RuntimeError(f"Failed to load document {original_doc_name}: {e}")
+
+    if not documents:
+        logger.warning(f"No documents loaded from {original_doc_name}. The file might be empty or unreadable.")
+        return []
+
+    # Initialize the text splitter
+    text_splitter = KoreanSentenceSplitter(
+        chunk_size=config.LC_CHUNK_SIZE,
+        chunk_overlap=config.LC_CHUNK_OVERLAP,
+        length_function=len,
+        # is_separator_regex=False,
+    )
+
+    all_split_chunks = []
+    for doc in documents: # Iterate if loader returns multiple documents (e.g. some CSV loaders)
+        chunks = text_splitter.split_text(doc.page_content)
+        for i, chunk_text in enumerate(chunks):
+            # Create a new Document object for each chunk with enriched metadata
+            chunk_metadata = doc.metadata.copy() # Start with existing metadata from the loader
+            chunk_metadata.update({
+                'doc_id': doc_id,  # Master document ID for all chunks of this file
+                'doc_name': original_doc_name, # Original file name
+                'chunk_index': i, # Index of this chunk within the document
+                'file_path_source': file_path # Optional: path of the source file processed
+            })
+            all_split_chunks.append(Document(page_content=chunk_text, metadata=chunk_metadata))
     
-    file_name = os.path.basename(file_path)
-    
-    # 1. Load document(s) from file
-    loaded_docs = load_document(file_path)
-    if not loaded_docs:
-        return [] # Return empty if loading failed
-
-    # 2. Split the loaded documents into chunks
-    split_docs = split_documents(loaded_docs)
-
-    # 3. Add common metadata (doc_id, doc_name) to each chunk
-    for i, chunk in enumerate(split_docs):
-        chunk.metadata['doc_id'] = doc_id
-        chunk.metadata['doc_name'] = file_name
-        chunk.metadata['chunk_index'] = i # Add chunk index
-
-    logger.info(f"Processed '{file_name}' (ID: {doc_id}): Loaded {len(loaded_docs)} sections, split into {len(split_docs)} chunks.")
-    return split_docs
+    logger.info(f"Document '{original_doc_name}' (ID: {doc_id}) split into {len(all_split_chunks)} chunks.")
+    return all_split_chunks
 
 # Note: The actual adding to the vector store is now handled separately,
 # typically in the main application logic (app.py) after calling load_and_split_document.

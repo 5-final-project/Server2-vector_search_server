@@ -2,8 +2,8 @@
 FROM python:3.11-slim
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies required by unstructured and potentially other libraries
 # libmagic1 for file type detection, poppler-utils for PDF processing
@@ -31,7 +31,7 @@ COPY . .
 
 # Copy the pre-built vector database into the container
 # Ensure this directory exists locally when building
-COPY vector_db_chroma_lc ./vector_db_chroma_lc
+# COPY vector_db_chroma_lc ./vector_db_chroma_lc
 
 # Create the uploads directory (if it doesn't exist in the copy)
 # This directory is used by the application to temporarily store uploaded files
