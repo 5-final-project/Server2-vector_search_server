@@ -67,6 +67,27 @@ def document_exists(collection_name: str, doc_name: str) -> bool:
         logger.error(f"Error checking document existence for '{doc_name}' in '{collection_name}': {e}")
         return False # Or re-raise depending on desired error handling
 
+def document_exists_globally(doc_name: str) -> bool:
+    """Checks if a document with the given doc_name already exists in ANY collection."""
+    global vector_stores
+    if not vector_stores: # Should be initialized by initialize_vector_stores()
+        logger.warning("Vector stores are not initialized. Cannot check for global document existence.")
+        return False # Or raise an error, depending on desired strictness
+
+    for collection_name, store_instance in vector_stores.items():
+        try:
+            # Chroma's get method with a where filter can check for metadata.
+            results = store_instance.get(where={"doc_name": doc_name}, limit=1)
+            if results and results.get('ids'):
+                logger.info(f"Document '{doc_name}' found in collection '{collection_name}'. Global check positive.")
+                return True
+        except Exception as e:
+            # Log error but continue checking other collections
+            logger.error(f"Error checking document '{doc_name}' in collection '{collection_name}' during global check: {e}")
+    
+    logger.info(f"Document '{doc_name}' not found in any collection during global check.")
+    return False
+
 def add_documents_to_store(docs: List[Document], target_collection_name: str):
     """Adds a list of LangChain Document objects to the specified target collection AND the master collection."""
     if not docs:

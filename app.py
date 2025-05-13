@@ -21,22 +21,83 @@ from vector_store import (
     delete_document_by_id, # Added for document deletion
     initialize_vector_stores, # Added for initializing stores at startup
     get_vector_store, # Added for retrieving a specific vector store instance
-    document_exists # Added for checking if a document already exists
+    document_exists, # Keep for now, or remove if not used elsewhere
+    document_exists_globally # Import the new function
 )
 from document_processor import load_and_split_document # Import the processing function
 from api_models import (
     KeywordSearchRequest,
-    DocumentUploadResponse,
     SearchResponse,
     ListDocumentsResponse,
     DocumentInfo,
-    SearchResultItem
+    SearchResultItem,
+    BatchUploadResponse, # Updated import
+    FileUploadStatus # Updated import
 )
 from langchain_chroma import Chroma # Chroma import for type checking
+
+# S3 Integration dependencies
+from dotenv import load_dotenv
+import boto3
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# --- AWS S3 Configuration and Client Initialization ---
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
+BUCKET_NAME = os.getenv("BUCKET_NAME")
+AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION")
+
+s3_client = None
+try:
+    if AWS_ACCESS_KEY and AWS_SECRET_KEY and BUCKET_NAME and AWS_DEFAULT_REGION:
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=AWS_ACCESS_KEY,
+            aws_secret_access_key=AWS_SECRET_KEY,
+            region_name=AWS_DEFAULT_REGION
+        )
+        logger.info("S3 client initialized successfully.")
+    else:
+        logger.warning("AWS S3 credentials or configuration not fully set. S3 upload disabled.")
+except Exception as e:
+    logger.error(f"Failed to initialize S3 client: {e}")
+    s3_client = None # Ensure client is None if init fails
+
+def _upload_file_to_s3(file_path: str, object_name: str) -> bool:
+    """Helper function to upload a file to S3.
+
+    Args:
+        file_path (str): The local path to the file to upload.
+        object_name (str): The desired object name (key) in S3.
+
+    Returns:
+        bool: True if upload was successful, False otherwise.
+    """
+    if not s3_client:
+        logger.error("S3 client not available. Cannot upload file.")
+        return False
+    if not BUCKET_NAME:
+        logger.error("S3 BUCKET_NAME not configured. Cannot upload file.")
+        return False
+
+    try:
+        logger.info(f"Uploading {file_path} to S3 bucket '{BUCKET_NAME}' as '{object_name}'")
+        s3_client.upload_file(file_path, BUCKET_NAME, object_name)
+        logger.info(f"Successfully uploaded {file_path} to s3://{BUCKET_NAME}/{object_name}")
+        return True
+    except FileNotFoundError:
+        logger.error(f"Local file not found for S3 upload: {file_path}")
+        return False
+    except Exception as e:
+        # Catch potential boto3 exceptions specifically if needed, e.g., ClientError
+        logger.error(f"Error uploading '{file_path}' to S3 as '{object_name}': {e}")
+        return False
 
 # Initialize FastAPI app
 app = FastAPI(title="Document Search System (LangChain Refactored)")
@@ -55,7 +116,7 @@ app.add_middleware(
 
 # --- API Endpoints ---
 
-@app.post("/upload-document") # Removed response_model for custom JSONResponse
+@app.post("/upload-document", response_model=BatchUploadResponse) # Use the new Pydantic model
 async def upload_document_endpoint(files: List[UploadFile] = File(...), collection_name: Optional[str] = Query(None, description="The name of the collection to upload the document to. Defaults to the master collection if not provided.")):
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded.")
@@ -63,179 +124,244 @@ async def upload_document_endpoint(files: List[UploadFile] = File(...), collecti
     effective_collection_name = collection_name if collection_name else config.MASTER_COLLECTION_NAME
     logger.info(f"Attempting to upload {len(files)} file(s) to collection: {effective_collection_name}")
 
-    # Ensure the target collection exists or can be created (get_vector_store might create it)
     try:
-        get_vector_store(effective_collection_name)
+        get_vector_store(effective_collection_name) # Ensure collection is accessible
     except ValueError as e:
-        logger.error(f"Error ensuring collection '{effective_collection_name}' exists before upload: {e}")
-        # Depending on config, this might mean we cannot proceed.
-        # For now, we assume get_vector_store or add_documents_to_store will create if needed.
-        pass 
+        logger.error(f"Failed to access collection '{effective_collection_name}': {e}")
+        raise HTTPException(status_code=404, detail=f"Collection '{effective_collection_name}' not found or not initialized.")
 
-    processed_files_info = []
+    processed_files_info: List[FileUploadStatus] = []
 
     for file in files:
         original_filename = file.filename
-        file_extension = os.path.splitext(original_filename)[1].lower()
-        # Assign a doc_id for the uploaded file itself (zip or single). 
-        # For sub-files in a zip, new doc_ids will be generated.
-        top_level_doc_id = str(uuid.uuid4()) 
+        file_status = FileUploadStatus(
+            filename=original_filename,
+            status="pending",
+            vector_db_status="pending",
+            s3_status="pending"
+        )
+        temp_file_path = None
 
-        if file_extension == '.zip':
-            try:
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    zip_file_path = os.path.join(temp_dir, original_filename)
-                    # Save the uploaded zip file to the temporary directory
-                    with open(zip_file_path, "wb") as buffer:
-                        buffer.write(await file.read())
-                    
-                    logger.info(f"Extracting zip file: {original_filename} to {temp_dir}")
-                    # Instead of zip_ref.extractall(temp_dir), manually extract to handle filenames
-                    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-                        for member in zip_ref.infolist():
-                            try:
-                                raw_filename_from_zip = member.filename
-                                resolved_filename_str = ""
+        try: # Outer try block for processing a single file
+            temp_file_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{original_filename}")
+            with open(temp_file_path, "wb") as buffer:
+                buffer.write(await file.read())
+            logger.info(f"File '{original_filename}' saved temporarily to '{temp_file_path}'")
 
-                                # Check if UTF-8 flag (0x800) is set in general purpose bit flag
-                                if not (member.flag_bits & 0x800):
-                                    # UTF-8 flag is NOT set. Python's zipfile decodes using CP437 by default.
-                                    # Try to "reverse" the CP437 decoding and re-decode as UTF-8.
-                                    # This handles cases where macOS/Windows use UTF-8 but don't set the flag.
+            # Check if document exists globally
+            if document_exists_globally(doc_name=original_filename):
+                logger.warning(f"Document named '{original_filename}' already exists in one of the collections. Skipping Vector DB processing and S3 upload globally.")
+                file_status.status = "skipped"
+                file_status.vector_db_status = "skipped"
+                file_status.s3_status = "skipped"
+                file_status.message = f"Document with name '{original_filename}' already exists globally."
+            else:
+                # If it's a ZIP file, extract and process its contents
+                if original_filename.lower().endswith('.zip'):
+                    logger.info(f"'{original_filename}' is a ZIP file. Attempting to extract and process...")
+                    file_status.extracted_files = []
+                    all_extracted_successful_vdb = True
+                    all_extracted_successful_s3 = True
+
+                    with tempfile.TemporaryDirectory() as extract_dir:
+                        try:
+                            with zipfile.ZipFile(temp_file_path, 'r') as zip_ref:
+                                for member in zip_ref.infolist():
+                                    original_member_filename = member.filename # For logging in case of failure
                                     try:
-                                        corrected_filename = raw_filename_from_zip.encode('cp437').decode('utf-8')
-                                        resolved_filename_str = corrected_filename
-                                        logger.debug(f"ZIP member '{raw_filename_from_zip}' (no UTF-8 flag) re-interpreted from CP437 to UTF-8 as '{resolved_filename_str}'")
-                                    except (UnicodeEncodeError, UnicodeDecodeError) as e_recode:
-                                        logger.warning(f"Could not re-interpret ZIP member '{raw_filename_from_zip}' as UTF-8 from CP437; falling back to as-is from zipfile. Error: {e_recode}")
-                                        resolved_filename_str = raw_filename_from_zip # Fallback to what zipfile gave
-                                else:
-                                    # UTF-8 flag IS set. Assume zipfile already decoded it as UTF-8.
-                                    resolved_filename_str = raw_filename_from_zip
-                                    logger.debug(f"ZIP member '{raw_filename_from_zip}' (UTF-8 flag set) used as-is from zipfile.")
+                                        # Check for UTF-8 flag (bit 11 of general purpose bit flag)
+                                        is_utf8 = member.flag_bits & 0x800
+                                        
+                                        if is_utf8:
+                                            decoded_filename = member.filename
+                                            # logger.debug(f"Filename '{original_member_filename}' is UTF-8 encoded.")
+                                        else:
+                                            # Not flagged as UTF-8, try CP437 -> UTF-8 then CP437 -> EUC-KR
+                                            # logger.debug(f"Filename '{original_member_filename}' not flagged as UTF-8. Attempting CP437 decode.")
+                                            try:
+                                                decoded_filename = member.filename.encode('cp437').decode('utf-8')
+                                            except UnicodeDecodeError:
+                                                # logger.debug(f"CP437 -> UTF-8 failed for '{original_member_filename}'. Attempting CP437 -> EUC-KR.")
+                                                decoded_filename = member.filename.encode('cp437').decode('euc-kr', 'ignore') # 'ignore' errors for broader compatibility
+                                        
+                                        # Normalize filename (NFC for macOS/Windows compatibility)
+                                        member.filename = unicodedata.normalize('NFC', decoded_filename)
+                                        # logger.debug(f"Normalized filename: '{member.filename}' from '{original_member_filename}'")
 
-                                # Always apply NFC normalization to the resolved string
-                                member_filename_normalized = unicodedata.normalize('NFC', resolved_filename_str)
-                                if member_filename_normalized != resolved_filename_str:
-                                    logger.debug(f"Applied NFC normalization: '{resolved_filename_str}' -> '{member_filename_normalized}'")
+                                    except Exception as e_decode:
+                                        # If any decoding/normalization step fails, log and use original filename
+                                        logger.warning(f"Could not properly decode or normalize filename '{original_member_filename}': {e_decode}. Using it as is for extraction.")
+                                        member.filename = original_member_filename # Fallback to original member filename
 
-                                # Skip macOS specific hidden files/folders, .DS_Store, and directory entries themselves
-                                if member_filename_normalized.startswith('__MACOSX/') or \
-                                   member_filename_normalized.endswith('.DS_Store') or \
-                                   member.is_dir():
-                                    logger.debug(f"Skipping ZIP member (post-normalization): {member_filename_normalized}")
-                                    continue
+                                    zip_ref.extract(member, extract_dir)
 
-                                # Construct full path for the extracted file within temp_dir
-                                target_path = os.path.join(temp_dir, member_filename_normalized)
+                                logger.info(f"Successfully extracted '{original_filename}' to '{extract_dir}'.")
+
+                                for extracted_filename_os in os.listdir(extract_dir):
+                                    extracted_filename_relative = extracted_filename_os
+                                    # Use only the extracted filename as the display name
+                                    extracted_file_display_name = extracted_filename_relative
                                 
-                                # Ensure parent directory exists for the file, especially for nested structures
-                                target_parent_dir = os.path.dirname(target_path)
-                                if not os.path.exists(target_parent_dir):
-                                    os.makedirs(target_parent_dir)
-                                
-                                # Extract file manually to the target path with the normalized name
-                                with zip_ref.open(member) as source_file, open(target_path, "wb") as target_file_stream:
-                                    target_file_stream.write(source_file.read())
-                                logger.debug(f"Extracted '{member.filename}' to '{target_path}' with normalized name.")
+                                    sub_file_status = FileUploadStatus(
+                                        filename=extracted_file_display_name,
+                                        status="pending",
+                                        vector_db_status="pending",
+                                        s3_status="pending"
+                                    )
 
-                            except Exception as e_member:
-                                logger.error(f"Error processing member {member.filename} from zip {original_filename}: {e_member}")
-                                # Optionally, add info about this specific member error to processed_files_info
-                                # processed_files_info.append({
-                                #     "file_name": f"{original_filename}/{member.filename}", 
-                                #     "status": f"Error extracting/normalizing member: {str(e_member)}", 
-                                #     "doc_id": top_level_doc_id # Or a new one for the member if desired
-                                # })
-                                continue # Continue with other members
+                                    if document_exists_globally(doc_name=extracted_file_display_name):
+                                        logger.warning(f"Extracted document '{extracted_file_display_name}' already exists globally. Skipping.")
+                                        sub_file_status.status = "skipped"
+                                        sub_file_status.vector_db_status = "skipped"
+                                        sub_file_status.s3_status = "skipped"
+                                        sub_file_status.message = "Document already exists globally."
+                                    else:
+                                        extracted_doc_id = str(uuid.uuid4())
+                                        sub_file_status.doc_id = extracted_doc_id # Assign doc_id to status
+                                        documents: List[Document] = []
+                                        try:
+                                            documents = load_and_split_document(
+                                                file_path=os.path.join(extract_dir, extracted_filename_relative),
+                                                doc_id=extracted_doc_id,
+                                                original_doc_name=extracted_file_display_name # Corrected argument name
+                                            )
+                                            if documents:
+                                                add_documents_to_store(documents, target_collection_name=effective_collection_name)
+                                                sub_file_status.vector_db_status = "success"
+                                            else:
+                                                sub_file_status.vector_db_status = "skipped"
+                                                sub_file_status.message = "No content to process."
+                                        except Exception as e_proc:
+                                            all_extracted_successful_vdb = False
+                                            sub_file_status.vector_db_status = "failed"
+                                            sub_file_status.message = (sub_file_status.message + f" VDB Error: {str(e_proc)[:100]};" if sub_file_status.message else f"VDB Error: {str(e_proc)[:100]};")
+                                            logger.error(f"Error processing extracted file '{extracted_file_display_name}' for VectorDB: {e_proc}")
+                                    
+                                        # S3 Upload for extracted file
+                                        if s3_client:
+                                            extracted_s3_object_name = f"{effective_collection_name}/{extracted_filename_relative}"
+                                            try:
+                                                with open(os.path.join(extract_dir, extracted_filename_relative), "rb") as f_obj_ext:
+                                                    s3_client.upload_fileobj(f_obj_ext, BUCKET_NAME, extracted_s3_object_name)
+                                                sub_file_status.s3_status = "success"
+                                            except Exception as e_s3_ext:
+                                                all_extracted_successful_s3 = False
+                                                sub_file_status.s3_status = "failed"
+                                                sub_file_status.message = (sub_file_status.message + f" S3 Error: {str(e_s3_ext)[:100]};" if sub_file_status.message else f"S3 Error: {str(e_s3_ext)[:100]};")
+                                                logger.error(f"Failed to upload extracted file '{extracted_file_display_name}' to S3: {e_s3_ext}")
+                                        else:
+                                            sub_file_status.s3_status = "skipped"
+                                            all_extracted_successful_s3 = False
+                                            sub_file_status.message = (sub_file_status.message + " S3 client NA;" if sub_file_status.message else "S3 client NA;")
+                                        
+                                        # Determine overall status for sub-file
+                                        if sub_file_status.vector_db_status == "success" and sub_file_status.s3_status == "success":
+                                            sub_file_status.status = "success"
+                                        elif sub_file_status.vector_db_status == "skipped" and sub_file_status.s3_status == "skipped":
+                                            sub_file_status.status = "skipped"
+                                        else:
+                                            sub_file_status.status = "partial success" if sub_file_status.vector_db_status == "success" or sub_file_status.s3_status == "success" else "error"
 
-                    logger.info(f"Successfully extracted and normalized contents of zip file: {original_filename}")
+                                    file_status.extracted_files.append(sub_file_status)
+                        
+                        except zipfile.BadZipFile:
+                            logger.error(f"'{original_filename}' is not a valid ZIP file or is corrupted.")
+                            file_status.status = "error"
+                            file_status.message = "Invalid or corrupted ZIP file."
+                            all_extracted_successful_vdb = False
+                            all_extracted_successful_s3 = False
+                        except Exception as e_zip:
+                            logger.error(f"Error processing ZIP file '{original_filename}': {e_zip}")
+                            file_status.status = "error"
+                            file_status.message = f"ZIP processing error: {str(e_zip)[:100]}"
+                            all_extracted_successful_vdb = False
+                            all_extracted_successful_s3 = False
                     
-                    extracted_files_count = 0
-                    # Walk through the extracted contents (os.walk will now see normalized names)
-                    for root, _, extracted_filenames_in_walk in os.walk(temp_dir):
-                        for extracted_filename_only in extracted_filenames_in_walk:
-                            # The original zip file itself is not in the walk results of temp_dir's contents.
-                            # (unless it was named like a regular file inside the zip, which is not standard)
-                            
-                            full_extracted_file_path = os.path.join(root, extracted_filename_only)
-                            # Create a unique doc_name for metadata, showing its origin from the zip
-                            # Relative path within the zip, using normalized names from the filesystem
-                            relative_path_in_zip = os.path.relpath(full_extracted_file_path, temp_dir)
-                            doc_name_for_metadata = relative_path_in_zip # Changed from f"{original_filename}/{relative_path_in_zip}"
-                            sub_doc_id = str(uuid.uuid4()) # New ID for each file in zip
-                            
-                            try:
-                                logger.info(f"Processing extracted file: {doc_name_for_metadata}")
-                                documents = load_and_split_document(full_extracted_file_path, doc_id=sub_doc_id, original_doc_name=doc_name_for_metadata)
-                                
-                                if documents:
-                                    add_documents_to_store(documents, effective_collection_name)
-                                    processed_files_info.append({
-                                        "file_name": doc_name_for_metadata, 
-                                        "status": "Successfully processed and added from zip", 
-                                        "doc_id": sub_doc_id
-                                    })
-                                    extracted_files_count += 1
-                                else:
-                                    logger.warning(f"No documents could be loaded from extracted file: {doc_name_for_metadata}")
-                                    processed_files_info.append({
-                                        "file_name": doc_name_for_metadata, 
-                                        "status": "No content loaded or processed from zip component", 
-                                        "doc_id": sub_doc_id
-                                    })
-                            except Exception as e:
-                                logger.error(f"Error processing extracted file {doc_name_for_metadata}: {e}")
-                                processed_files_info.append({
-                                    "file_name": doc_name_for_metadata, 
-                                    "status": f"Error processing from zip: {str(e)}", 
-                                    "doc_id": sub_doc_id
-                                })
-                    if extracted_files_count == 0 and not processed_files_info:
-                        # Only add this if no other info (e.g. errors for subfiles) has been added for this zip
-                        processed_files_info.append({"file_name": original_filename, "status": "Zip file was empty or contained no processable files.", "doc_id": top_level_doc_id}) 
+                    # Determine overall status for the ZIP file based on its extracted contents and original file S3 upload
+                    if not file_status.extracted_files:
+                        file_status.status = "error" if "error" in file_status.status else "skipped"
+                        file_status.vector_db_status = "failed" if file_status.status == "error" else "skipped"
+                    elif all_extracted_successful_vdb and all_extracted_successful_s3:
+                        file_status.status = "success"
+                        file_status.vector_db_status = "success"
+                    else:
+                        file_status.status = "partial success"
+                        if any(sf.vector_db_status == "success" for sf in file_status.extracted_files):
+                            file_status.vector_db_status = "partial success"
+                        elif all(sf.vector_db_status == "skipped" for sf in file_status.extracted_files):
+                            file_status.vector_db_status = "skipped"
+                        else:
+                            file_status.vector_db_status = "failed"
                 
-            except zipfile.BadZipFile:
-                logger.error(f"Uploaded file {original_filename} is not a valid zip file or is corrupted.")
-                processed_files_info.append({"file_name": original_filename, "status": "Invalid or corrupted zip file", "doc_id": top_level_doc_id})
-            except Exception as e:
-                logger.exception(f"An unexpected error occurred while processing zip file {original_filename}: {e}")
-                processed_files_info.append({"file_name": original_filename, "status": f"Error processing zip: {str(e)}", "doc_id": top_level_doc_id})
-        
-        else: # Not a .zip file, process as a single file
-            temp_file_path = ""
-            try:
-                # Use NamedTemporaryFile for single files as well for consistent temp handling
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
-                    temp_file.write(await file.read())
-                    temp_file_path = temp_file.name
-                
-                logger.info(f"Processing single file: {original_filename}")
-                documents = load_and_split_document(temp_file_path, doc_id=top_level_doc_id, original_doc_name=original_filename)
-                
-                if documents:
-                    add_documents_to_store(documents, effective_collection_name)
-                    processed_files_info.append({"file_name": original_filename, "status": "Successfully processed and added", "doc_id": top_level_doc_id})
-                else:
-                    logger.warning(f"No documents could be loaded from file: {original_filename}")
-                    processed_files_info.append({"file_name": original_filename, "status": "No content loaded or processed", "doc_id": top_level_doc_id})
-            
-            except Exception as e:
-                logger.exception(f"Error processing file {original_filename}: {e}")
-                processed_files_info.append({"file_name": original_filename, "status": f"Error: {str(e)}", "doc_id": top_level_doc_id})
-            finally:
-                if temp_file_path and os.path.exists(temp_file_path):
-                    os.remove(temp_file_path) # Clean up the temporary file
+                # For non-ZIP files
+                else: 
+                    current_doc_id = str(uuid.uuid4()) # Generate UUID for doc_id
+                    file_status.doc_id = current_doc_id # Store doc_id in status
+                    
+                    # S3 Upload Logic for the single file, using UUID in the key
+                    s3_upload_successful = False
+                    if s3_client:
+                        s3_object_name = f"{effective_collection_name}/{original_filename}"
+                        try:
+                            # We already have the temp_file_path from earlier
+                            with open(temp_file_path, "rb") as f_obj:
+                                s3_client.upload_fileobj(f_obj, BUCKET_NAME, s3_object_name)
+                            logger.info(f"Single file '{original_filename}' uploaded to S3 bucket '{BUCKET_NAME}' as '{s3_object_name}'.")
+                            s3_upload_successful = True
+                            file_status.s3_status = "success"
+                        except Exception as e_s3:
+                            logger.error(f"Failed to upload single file '{original_filename}' to S3: {e_s3}")
+                            file_status.s3_status = "failed"
+                            file_status.message = (file_status.message + f" S3 upload failed: {e_s3};" if file_status.message else f"S3 upload failed: {e_s3};")
+                    else:
+                        logger.warning("S3 client not available. Skipping S3 upload for single file.")
+                        file_status.s3_status = "skipped"
+                        file_status.message = (file_status.message + " S3 client not available;" if file_status.message else "S3 client not available;")
 
-    if not processed_files_info:
-        # This might happen if 'files' list was empty (though caught earlier) or all files failed in a way that didn't add to info.
-        return JSONResponse(content={"message": "No files were processed or all failed early."}, status_code=400)
-    
-    return JSONResponse(content={
-        "message": "File processing complete.",
-        "processed_files": processed_files_info,
-        "collection_name": effective_collection_name
-    }, status_code=200)
+                    # Vector DB Processing for single file
+                    documents: List[Document] = []
+                    try:
+                        logger.info(f"Processing single file '{original_filename}' for Vector DB. Collection: {effective_collection_name}, Doc ID: {current_doc_id}")
+                        documents = load_and_split_document(temp_file_path, current_doc_id, original_filename)
+                        if documents:
+                            add_documents_to_store(documents, target_collection_name=effective_collection_name)
+                            file_status.vector_db_status = "success"
+                        else:
+                            logger.info(f"No documents to process in '{original_filename}'.")
+                            file_status.vector_db_status = "skipped"
+                            file_status.message = (file_status.message + " VDB: No content;" if file_status.message else "VDB: No content;")
+                    except Exception as e:
+                        logger.error(f"Error processing file '{original_filename}' for VectorDB: {e}")
+                        file_status.vector_db_status = "failed"
+                        file_status.message = (file_status.message + f" VDB Error: {str(e)[:100]};" if file_status.message else f"VDB Error: {str(e)[:100]};")
+                    
+                    # Final status update for single file
+                    if file_status.vector_db_status == "success" and s3_upload_successful: 
+                        file_status.status = "success"
+                    elif file_status.vector_db_status == "failed" or file_status.s3_status == "failed":
+                        file_status.status = "failed"
+                    else: # Covers s3 skipped, vdb skipped (no content), etc.
+                        file_status.status = "partial_failure"
+
+        except HTTPException: # Re-raise HTTPExceptions to be handled by FastAPI
+            raise
+        except Exception as e_outer:
+            logger.error(f"Unexpected error processing file '{original_filename}': {e_outer}", exc_info=True)
+            file_status.status = "error"
+            file_status.message = f"Unexpected error: {str(e_outer)[:100]}"
+            if file_status.vector_db_status == "pending": file_status.vector_db_status = "failed"
+            if file_status.s3_status == "pending": file_status.s3_status = "failed"
+        finally: 
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    logger.debug(f"Temporary file '{temp_file_path}' removed.")
+                except OSError as e_remove:
+                    logger.warning(f"Could not remove temporary file '{temp_file_path}': {e_remove}")
+            processed_files_info.append(file_status) 
+
+    logger.info(f"Finished processing all {len(files)} files for collection '{effective_collection_name}'.")
+    return BatchUploadResponse(processed_files=processed_files_info)
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -471,8 +597,6 @@ async def documents_ui_endpoint(request: Request, collection_name: str = Query(d
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Uvicorn server for LangChain-based application...")
-    # Ensure necessary environment variables or configurations are set if needed
-    # e.g., for specific model downloads or API keys if used later.
-    
-    # Run the FastAPI app
+    # Ensure necessary vector stores are initialized at startup
+    initialize_vector_stores()
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

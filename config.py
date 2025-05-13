@@ -10,7 +10,6 @@ class Config:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
     VECTOR_DB_BASE_PATH = os.path.join(BASE_DIR, "vector_db_collections") # Base path for all collections
-    VECTOR_DB_PATH = os.path.join(VECTOR_DB_BASE_PATH, "vector_db_chroma_lc") # New path for LangChain Chroma DB
     
     # ChromaDB Settings
     # MASTER_COLLECTION_NAME will store all documents from all specific collections.
@@ -52,7 +51,7 @@ class Config:
     def __init__(self):
         # Create necessary directories if they don't exist
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
-        os.makedirs(self.VECTOR_DB_PATH, exist_ok=True)
+        os.makedirs(self.VECTOR_DB_BASE_PATH, exist_ok=True)
         # Each collection will have its own subdirectory under VECTOR_DB_BASE_PATH
         # os.makedirs(self.VECTOR_DB_BASE_PATH, exist_ok=True) # get_vector_store will handle subdirectories
 

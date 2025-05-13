@@ -4,6 +4,7 @@ uvicorn[standard]
 pydantic
 python-multipart
 torch # Keep for HuggingFaceEmbeddings device selection if needed
+boto3
 
 # LangChain specific
 langchain

@@ -16,7 +16,7 @@ class KoreanSentenceSplitter(TextSplitter):
         self,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
-        backend: str = 'fast', # KSS backend option
+        backend: str = 'auto', # KSS backend option
         length_function = len,
         keep_separator: bool = False, # Keep for TextSplitter compatibility
         add_start_index: bool = False, # Keep for TextSplitter compatibility
