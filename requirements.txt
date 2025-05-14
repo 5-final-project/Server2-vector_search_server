@@ -19,7 +19,8 @@ transformers # Keep for HuggingFaceEmbeddings
 unstructured # For various file types
 pypdf # For PDF loading via LangChain
 python-docx # Keep for docx loading if unstructured needs it
-kss==4.5.4
+kss
 numpy<2
 pdfminer
 pdfminer.six
+langchain-docling

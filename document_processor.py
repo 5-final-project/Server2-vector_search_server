@@ -10,9 +10,11 @@ from langchain_community.document_loaders import (
     TextLoader,
     UnstructuredFileLoader # Generic loader, might require extra dependencies
 )
+from langchain_docling import DoclingLoader
 # from langchain_text_splitters import RecursiveCharacterTextSplitter
 from text_spliter import KoreanSentenceSplitter
 from langchain_core.documents import Document
+from langchain_community.vectorstores.utils import filter_complex_metadata
 
 from config import config # Import config instance
 # We don't directly use the vector store or embedder here anymore,
@@ -42,7 +44,7 @@ def load_document(file_path: str) -> List[Document]:
 
     try:
         if file_extension == ".pdf":
-            loader = PDFMinerLoader(file_path)
+            loader = DoclingLoader(file_path)
         elif file_extension in [".docx", ".doc"]:
             # UnstructuredWordDocumentLoader often works well
             loader = UnstructuredWordDocumentLoader(file_path, mode="elements") # Try "elements" mode
@@ -96,7 +98,7 @@ def split_documents(documents: List[Document]) -> List[Document]:
 
 # --- Combined Processing Function (Example Usage Pattern) ---
 SUPPORTED_FILE_TYPES = { # Added to ensure we can check against it
-    ".pdf": PDFMinerLoader,
+    ".pdf": DoclingLoader,
     ".txt": TextLoader,
     # ".csv": CSVLoader,
     # TODO: Add .doc and .docx with UnstructuredFileLoader if textൃact is installed
@@ -148,6 +150,18 @@ def load_and_split_document(file_path: str, doc_id: str, original_doc_name: str)
             all_split_chunks.append(Document(page_content=chunk_text, metadata=chunk_metadata))
     
     logger.info(f"Document '{original_doc_name}' (ID: {doc_id}) split into {len(all_split_chunks)} chunks.")
+
+    # Filter complex metadata before returning
+    try:
+        all_split_chunks = filter_complex_metadata(all_split_chunks)
+        logger.info(f"Successfully filtered complex metadata from {len(all_split_chunks)} chunks for document '{original_doc_name}'.")
+    except Exception as e:
+        logger.error(f"Error filtering complex metadata for document '{original_doc_name}': {e}")
+        # Depending on the desired error handling strategy, you might re-raise the exception
+        # or return the chunks as is (which might lead to upstream errors with ChromaDB)
+        # For now, re-raising to make the problem visible, consider a fallback if needed.
+        raise RuntimeError(f"Failed to filter metadata for document '{original_doc_name}': {e}") from e
+
     return all_split_chunks
 
 # Note: The actual adding to the vector store is now handled separately,

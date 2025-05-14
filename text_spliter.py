@@ -28,7 +28,7 @@ class KoreanSentenceSplitter(TextSplitter):
         Args:
             chunk_size: Max size of chunks (in characters).
             chunk_overlap: Max overlap between chunks (in characters).
-            backend: KSS backend ('mecab', 'pecab', 'fast', 'auto').
+            backend: KSS backend ('mecab', 'pecab', 'punct', 'auto').
             length_function: Function to measure text length.
             keep_separator: Passed to TextSplitter (usually False for sentence splitting).
             add_start_index: Passed to TextSplitter.

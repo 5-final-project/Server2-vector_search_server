@@ -141,7 +141,7 @@ cython_debug/
 /uploads/
 
 # Vector database directory
-/vector_db_chroma_lc/
+/vector_db_collections/
 
 # OS generated files
 .DS_Store
@@ -149,4 +149,3 @@ Thumbs.db
 
 venv
 venv/*
-/vector_db_collections/

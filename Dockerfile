@@ -24,7 +24,7 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 # This might download HuggingFace models if specified implicitly by langchain/transformers
 # Consider pre-downloading models in a separate step if startup time is critical
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --timeout 180 --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code into the container
 COPY . .
@@ -33,11 +33,11 @@ COPY . .
 # This directory is used by the application to temporarily store uploaded files
 RUN mkdir -p uploads
 
-# Make port 8000 available to the world outside this container
-EXPOSE 8000
+# Make port 8222 available to the world outside this container
+EXPOSE 8222
 
 # Define the command to run the application
 # Use 0.0.0.0 to allow connections from outside the container
 # Set workers based on CPU cores if needed for production (e.g., using gunicorn)
 # For simplicity, using uvicorn directly here. reload=False for production.
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8222"]

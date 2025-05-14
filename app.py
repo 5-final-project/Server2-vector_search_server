@@ -100,7 +100,7 @@ def _upload_file_to_s3(file_path: str, object_name: str) -> bool:
         return False
 
 # Initialize FastAPI app
-app = FastAPI(title="Document Search System (LangChain Refactored)")
+app = FastAPI(title="Document Search System")
 
 # Setup Jinja2 templates
 templates = Jinja2Templates(directory="templates")
